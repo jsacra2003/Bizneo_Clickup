@@ -251,6 +251,11 @@ class ClickUpCalendarSync:
 
     def create_time_entry(self, task_id: str, event: Dict, date: datetime, hours: int = 8) -> bool:
         """Create a time entry for a specific task and date"""
+        # Skip weekends (Saturday=5, Sunday=6)
+        if date.weekday() >= 5:
+            print(f"  ⊘ Skipping weekend day {date.strftime('%Y-%m-%d (%A)')}")
+            return True  # Return True to not count as failure
+
         # Check if time entry already exists for this date
         existing_entries = self.get_existing_time_entries(task_id, date)
 
