@@ -330,12 +330,43 @@ class ClickUpCalendarSync:
             print("No events found to sync")
             return
 
+        # Build a set of dates that have public holidays
+        public_holiday_dates = set()
+        for event in events:
+            if self.categorize_event(event) == 'public_holiday':
+                current_date = event['start']
+                end_date = event['end']
+                while current_date <= end_date:
+                    # Only add weekdays to the public holiday set
+                    if current_date.weekday() < 5:
+                        public_holiday_dates.add(current_date.date())
+                    current_date += timedelta(days=1)
+
+        print(f"Found {len(public_holiday_dates)} public holiday dates (excluding weekends)")
+
         # Process each event
         created_count = 0
         skipped_count = 0
 
         for event in events:
             event_type = self.categorize_event(event)
+
+            # Skip vacations that overlap with public holidays
+            if event_type == 'vacation':
+                # Check if any day of this vacation overlaps with a public holiday
+                has_overlap = False
+                current_date = event['start']
+                end_date = event['end']
+                while current_date <= end_date:
+                    if current_date.date() in public_holiday_dates:
+                        has_overlap = True
+                        break
+                    current_date += timedelta(days=1)
+
+                if has_overlap:
+                    print(f"\nSkipping: {event['summary']} (overlaps with public holiday)")
+                    skipped_count += 1
+                    continue
 
             if event_type:
                 print(f"\nProcessing: {event['summary']} ({event_type})")
