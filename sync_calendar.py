@@ -36,44 +36,28 @@ class ClickUpCalendarSync:
                 "Check your .env file."
             )
 
-        # Load optional config file for event mappings
-        if os.path.exists(config_path):
-            with open(config_path, 'r') as f:
-                self.config = json.load(f)
-            self.sync_settings = self.config.get('sync_settings', {})
-            self.event_mappings = self.sync_settings.get('event_mappings', self._default_event_mappings())
-        else:
-            # Use defaults if no config file
-            self.event_mappings = self._default_event_mappings()
+        # Load config file for event mappings
+        if not os.path.exists(config_path):
+            raise FileNotFoundError(
+                f"Config file '{config_path}' not found.\n"
+                f"Please copy config.example.json to config.json and customize it."
+            )
+
+        with open(config_path, 'r') as f:
+            self.config = json.load(f)
+
+        self.sync_settings = self.config.get('sync_settings', {})
+        self.event_mappings = self.sync_settings.get('event_mappings', {})
+
+        if not self.event_mappings:
+            raise ValueError(
+                "No event_mappings found in config file.\n"
+                "Please check your config.json has 'sync_settings.event_mappings' configured."
+            )
 
         self.headers = {
             'Authorization': self.clickup_api_key,
             'Content-Type': 'application/json'
-        }
-
-    def _default_event_mappings(self) -> Dict:
-        """Default event type mappings"""
-        return {
-            "vacation": {
-                "clickup_task_name": "Vacations",
-                "description": "Vacation day"
-            },
-            "student_leave": {
-                "clickup_task_name": "Student worker protocol",
-                "description": "Student worker protocol"
-            },
-            "sick_leave": {
-                "clickup_task_name": "Sick leave",
-                "description": "Sick leave"
-            },
-            "public_holiday": {
-                "clickup_task_name": "Public Holidays",
-                "description": "Public holiday"
-            },
-            "other": {
-                "clickup_task_name": "Other",
-                "description": "Other absence"
-            }
         }
 
     def fetch_calendar_events(self, days_ahead: int = 30) -> List[Dict]:
