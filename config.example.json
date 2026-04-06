@@ -1,0 +1,26 @@
+{
+  "sync_settings": {
+    "event_mappings": {
+      "vacation": {
+        "clickup_task_name": "Vacations",
+        "description": "Vacation day"
+      },
+      "student_leave": {
+        "clickup_task_name": "Student worker protocol",
+        "description": "Student worker protocol"
+      },
+      "sick_leave": {
+        "clickup_task_name": "Sick leave",
+        "description": "Sick leave"
+      },
+      "public_holiday": {
+        "clickup_task_name": "Public Holidays",
+        "description": "Public holiday"
+      },
+      "other": {
+        "clickup_task_name": "Other",
+        "description": "Other absence"
+      }
+    }
+  }
+}
