@@ -334,10 +334,38 @@ class ClickUpCalendarSync:
 def main():
     import argparse
 
-    parser = argparse.ArgumentParser(description='Sync calendar events to ClickUp')
-    parser.add_argument('--days', type=int, default=30, help='Number of days ahead to sync (default: 30)')
-    parser.add_argument('--config', type=str, default='config.json', help='Path to config file')
-    parser.add_argument('--dry-run', action='store_true', help='Run without creating tasks')
+    parser = argparse.ArgumentParser(
+        description='Sync calendar events (sick leave, student leave, vacation, etc.) from Bizneo/iCal to ClickUp time entries',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='''
+Examples:
+  %(prog)s                          # Sync next 30 days
+  %(prog)s --days 60                # Sync next 60 days
+  %(prog)s --dry-run                # Test without creating entries
+  %(prog)s --config custom.json     # Use custom config file
+
+For more information, see: https://github.com/jsacra2003/Bizneo_Clickup
+        '''
+    )
+    parser.add_argument(
+        '--days',
+        type=int,
+        default=30,
+        metavar='N',
+        help='number of days ahead to sync (default: 30)'
+    )
+    parser.add_argument(
+        '--config',
+        type=str,
+        default='config.json',
+        metavar='FILE',
+        help='path to config file (default: config.json)'
+    )
+    parser.add_argument(
+        '--dry-run',
+        action='store_true',
+        help='test run without creating time entries'
+    )
 
     args = parser.parse_args()
 
