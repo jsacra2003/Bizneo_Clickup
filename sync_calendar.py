@@ -25,6 +25,7 @@ class ClickUpCalendarSync:
         self.clickup_list_id = os.getenv('CLICKUP_LIST_ID')
         self.clickup_team_id = os.getenv('CLICKUP_TEAM_ID')
         self.calendar_url = os.getenv('BIZNEO_CALENDAR_URL')
+        self.public_holidays_url = os.getenv('PUBLIC_HOLIDAYS_CALENDAR_URL')
 
         # Validate required environment variables
         if not all([self.clickup_api_key, self.clickup_list_id, self.calendar_url]):
@@ -60,12 +61,12 @@ class ClickUpCalendarSync:
             'Content-Type': 'application/json'
         }
 
-    def fetch_calendar_events(self, days_ahead: int = 30) -> List[Dict]:
-        """Fetch calendar events from iCal URL"""
-        print(f"Fetching calendar events from {self.calendar_url}...")
+    def fetch_calendar_from_url(self, url: str, calendar_name: str = "calendar") -> List[Dict]:
+        """Fetch and parse events from a single iCal URL"""
+        print(f"Fetching {calendar_name} from {url}...")
 
         try:
-            response = requests.get(self.calendar_url, timeout=30)
+            response = requests.get(url, timeout=30)
             response.raise_for_status()
 
             # Parse iCal data
@@ -74,7 +75,6 @@ class ClickUpCalendarSync:
 
             # Get current date range
             now = datetime.now(pytz.UTC)
-            end_date = now + timedelta(days=days_ahead)
 
             for component in calendar.walk():
                 if component.name == "VEVENT":
@@ -98,28 +98,59 @@ class ClickUpCalendarSync:
                         event_end = datetime.combine(event_end - timedelta(days=1), datetime.min.time())
                         event_end = pytz.UTC.localize(event_end)
 
-                    # Filter events within date range
-                    if event_start <= end_date and event_end >= now:
-                        summary = str(component.get('summary', ''))
-                        description = str(component.get('description', ''))
+                    summary = str(component.get('summary', ''))
+                    description = str(component.get('description', ''))
 
-                        events.append({
-                            'summary': summary,
-                            'description': description,
-                            'start': event_start,
-                            'end': event_end,
-                            'uid': str(component.get('uid', ''))
-                        })
+                    events.append({
+                        'summary': summary,
+                        'description': description,
+                        'start': event_start,
+                        'end': event_end,
+                        'uid': str(component.get('uid', '')),
+                        'source': calendar_name
+                    })
 
-            print(f"Found {len(events)} events in calendar")
+            print(f"  Found {len(events)} events")
             return events
 
         except Exception as e:
-            print(f"Error fetching calendar events: {e}")
+            print(f"  Error fetching {calendar_name}: {e}")
             return []
+
+    def fetch_calendar_events(self, days_ahead: int = 30) -> List[Dict]:
+        """Fetch calendar events from all configured sources"""
+        all_events = []
+
+        # Fetch from Bizneo calendar
+        bizneo_events = self.fetch_calendar_from_url(self.calendar_url, "Bizneo calendar")
+        all_events.extend(bizneo_events)
+
+        # Fetch from public holidays calendar if configured
+        if self.public_holidays_url:
+            holidays_events = self.fetch_calendar_from_url(self.public_holidays_url, "Public holidays calendar")
+            # Mark all holiday events as public_holiday type
+            for event in holidays_events:
+                event['force_type'] = 'public_holiday'
+            all_events.extend(holidays_events)
+
+        # Filter events within date range
+        now = datetime.now(pytz.UTC)
+        end_date = now + timedelta(days=days_ahead)
+
+        filtered_events = [
+            event for event in all_events
+            if event['start'] <= end_date and event['end'] >= now
+        ]
+
+        print(f"Total: {len(filtered_events)} events in date range")
+        return filtered_events
 
     def categorize_event(self, event: Dict) -> Optional[str]:
         """Determine the event type based on summary/description"""
+        # Check if event has a forced type (e.g., from public holidays calendar)
+        if 'force_type' in event:
+            return event['force_type']
+
         summary = event['summary'].lower()
         description = event['description'].lower()
         combined_text = f"{summary} {description}"
