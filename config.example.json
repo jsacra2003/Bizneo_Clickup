@@ -26,7 +26,8 @@
       {
         "task_id": "",
         "custom_task_id": false,
-        "start_date": "2026-04-09",
+        "start_date": "2026-04-10",
+        "end_date": "2026-04-14", // Optional end date for the recurring task
         "days": 5,
         "hours": 2,
         "include_weekends": false
