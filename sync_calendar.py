@@ -27,16 +27,6 @@ class ClickUpCalendarSync:
         self.calendar_url = os.getenv('BIZNEO_CALENDAR_URL')
         self.public_holidays_url = os.getenv('PUBLIC_HOLIDAYS_CALENDAR_URL')
 
-        # Validate required environment variables
-        if not all([self.clickup_api_key, self.clickup_list_id, self.calendar_url]):
-            raise ValueError(
-                "Missing required environment variables. Please set:\n"
-                "  CLICKUP_API_KEY\n"
-                "  CLICKUP_LIST_ID\n"
-                "  BIZNEO_CALENDAR_URL\n"
-                "Check your .env file."
-            )
-
         # Load config file for event mappings
         if not os.path.exists(config_path):
             raise FileNotFoundError(
@@ -49,11 +39,22 @@ class ClickUpCalendarSync:
 
         self.sync_settings = self.config.get('sync_settings', {})
         self.event_mappings = self.sync_settings.get('event_mappings', {})
+        self.daily_recurring_tasks = self.sync_settings.get('daily_recurring_tasks', [])
 
-        if not self.event_mappings:
+        # Validate minimal required environment variables.
+        if not self.clickup_api_key:
             raise ValueError(
-                "No event_mappings found in config file.\n"
-                "Please check your config.json has 'sync_settings.event_mappings' configured."
+                "Missing required environment variable. Please set:\n"
+                "  CLICKUP_API_KEY\n"
+                "Check your .env file."
+            )
+
+        if not self.event_mappings and not self.daily_recurring_tasks:
+            raise ValueError(
+                "No sync rules found in config file.\n"
+                "Please configure at least one of:\n"
+                "  sync_settings.event_mappings\n"
+                "  sync_settings.daily_recurring_tasks"
             )
 
         self.headers = {
@@ -121,9 +122,14 @@ class ClickUpCalendarSync:
         """Fetch calendar events from all configured sources"""
         all_events = []
 
+        if not self.calendar_url and not self.public_holidays_url:
+            print("No calendar URLs configured; skipping calendar event sync")
+            return []
+
         # Fetch from Bizneo calendar
-        bizneo_events = self.fetch_calendar_from_url(self.calendar_url, "Bizneo calendar")
-        all_events.extend(bizneo_events)
+        if self.calendar_url:
+            bizneo_events = self.fetch_calendar_from_url(self.calendar_url, "Bizneo calendar")
+            all_events.extend(bizneo_events)
 
         # Fetch from public holidays calendar if configured
         if self.public_holidays_url:
@@ -187,6 +193,10 @@ class ClickUpCalendarSync:
 
     def get_task_by_type(self, event_type: str) -> Optional[str]:
         """Get the existing task ID for a given event type"""
+        if not self.clickup_list_id:
+            print("  ✗ CLICKUP_LIST_ID is required for event_mappings task lookup")
+            return None
+
         # Get task name from config
         event_config = self.event_mappings.get(event_type, {})
         target_task_name = event_config.get('clickup_task_name')
@@ -218,12 +228,53 @@ class ClickUpCalendarSync:
             print(f"  ✗ Error fetching tasks: {e}")
             return None
 
-    def get_existing_time_entries(self, task_id: str, date: datetime) -> List[Dict]:
-        """Get existing time entries for a task on a specific date"""
-        url = f"https://api.clickup.com/api/v2/task/{task_id}/time"
+    def get_task_by_name(self, task_name: str) -> Optional[str]:
+        """Get the existing task ID for a given ClickUp task name"""
+        if not task_name:
+            return None
+
+        if not self.clickup_list_id:
+            print("  ✗ CLICKUP_LIST_ID is required when using task_name lookup")
+            return None
+
+        url = f"https://api.clickup.com/api/v2/list/{self.clickup_list_id}/task"
+        params = {
+            'archived': 'false',
+        }
 
         try:
-            response = requests.get(url, headers=self.headers)
+            response = requests.get(url, headers=self.headers, params=params)
+            response.raise_for_status()
+            tasks = response.json().get('tasks', [])
+
+            for task in tasks:
+                if task['name'] == task_name:
+                    return task['id']
+
+            print(f"  ✗ Task '{task_name}' not found in list")
+            return None
+
+        except Exception as e:
+            print(f"  ✗ Error fetching tasks: {e}")
+            return None
+
+    def get_existing_time_entries(self, task_id: str, date: datetime, use_custom_task_id: bool = False) -> List[Dict]:
+        """Get existing time entries for a task on a specific date"""
+        url = f"https://api.clickup.com/api/v2/task/{task_id}/time"
+        params = None
+
+        # Support ClickUp custom task IDs (e.g. INF-1353)
+        if use_custom_task_id or '-' in task_id:
+            if not self.clickup_team_id:
+                print("  ⚠ Warning: CLICKUP_TEAM_ID is required for custom task IDs like INF-1353")
+                return []
+            params = {
+                'custom_task_ids': 'true',
+                'team_id': self.clickup_team_id
+            }
+
+        try:
+            response = requests.get(url, headers=self.headers, params=params)
             response.raise_for_status()
             user_data = response.json().get('data', [])
 
@@ -249,21 +300,41 @@ class ClickUpCalendarSync:
             print(f"  ⚠ Warning: Could not check existing time entries: {e}")
             return []
 
-    def create_time_entry(self, task_id: str, event: Dict, date: datetime, hours: int = 8) -> bool:
+    def create_time_entry(
+        self,
+        task_id: str,
+        event: Dict,
+        date: datetime,
+        hours: int = 8,
+        skip_weekends: bool = True,
+        description: Optional[str] = None,
+        use_custom_task_id: bool = False
+    ) -> bool:
         """Create a time entry for a specific task and date"""
-        # Skip weekends (Saturday=5, Sunday=6)
-        if date.weekday() >= 5:
+        # Skip weekends (Saturday=5, Sunday=6) unless explicitly allowed
+        if skip_weekends and date.weekday() >= 5:
             print(f"  ⊘ Skipping weekend day {date.strftime('%Y-%m-%d (%A)')}")
             return True  # Return True to not count as failure
 
         # Check if time entry already exists for this date
-        existing_entries = self.get_existing_time_entries(task_id, date)
+        existing_entries = self.get_existing_time_entries(task_id, date, use_custom_task_id=use_custom_task_id)
 
         if existing_entries:
             print(f"  ⊘ Time entry already exists for {date.strftime('%Y-%m-%d')} (skipping)")
             return True  # Return True since the entry exists
 
         url = f"https://api.clickup.com/api/v2/task/{task_id}/time"
+        params = None
+
+        # Support ClickUp custom task IDs (e.g. INF-1353)
+        if use_custom_task_id or '-' in task_id:
+            if not self.clickup_team_id:
+                print("  ✗ CLICKUP_TEAM_ID is required for custom task IDs like INF-1353")
+                return False
+            params = {
+                'custom_task_ids': 'true',
+                'team_id': self.clickup_team_id
+            }
 
         # Create time entry for the full day (8 hours by default)
         # ClickUp expects start and end times, or just duration without start
@@ -275,11 +346,11 @@ class ClickUpCalendarSync:
         time_entry_data = {
             'start': int(start_time.timestamp() * 1000),
             'end': int(end_time.timestamp() * 1000),
-            'description': f"{event['summary']}"
+            'description': description if description else f"{event['summary']}"
         }
 
         try:
-            response = requests.post(url, headers=self.headers, json=time_entry_data)
+            response = requests.post(url, headers=self.headers, params=params, json=time_entry_data)
             response.raise_for_status()
             print(f"  ✓ Added {hours}h time entry for {date.strftime('%Y-%m-%d')}")
             return True
@@ -288,6 +359,106 @@ class ClickUpCalendarSync:
             if hasattr(e, 'response') and e.response is not None:
                 print(f"    Response: {e.response.text}")
             return False
+
+    def parse_date_string(self, date_string: str) -> Optional[datetime]:
+        """Parse a YYYY-MM-DD date string into a UTC datetime"""
+        try:
+            parsed_date = datetime.strptime(date_string, "%Y-%m-%d")
+            return pytz.UTC.localize(parsed_date)
+        except ValueError:
+            return None
+
+    def create_daily_recurring_entries(self, recurring_task: Dict, dry_run: bool = False) -> bool:
+        """Create time entries for a specific task repeated every day for a date range"""
+        task_id_raw = recurring_task.get('task_id')
+        task_id = str(task_id_raw).strip() if task_id_raw else None
+        task_name = str(recurring_task.get('task_name', '')).strip()
+
+        if not task_id and not task_name:
+            print("  ✗ Provide 'task_id' or 'task_name' in daily_recurring_tasks")
+            return False
+
+        start_date_raw = recurring_task.get('start_date')
+        if start_date_raw:
+            start_date = self.parse_date_string(str(start_date_raw))
+            if not start_date:
+                print("  ✗ 'start_date' must use YYYY-MM-DD format")
+                return False
+        else:
+            start_date = datetime.now(pytz.UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+
+        end_date_raw = recurring_task.get('end_date')
+        end_date = None
+        if end_date_raw:
+            end_date = self.parse_date_string(str(end_date_raw))
+            if not end_date:
+                print("  ✗ 'end_date' must use YYYY-MM-DD format")
+                return False
+
+        days = recurring_task.get('days')
+        if end_date:
+            if end_date < start_date:
+                print("  ✗ 'end_date' cannot be before 'start_date'")
+                return False
+
+            calculated_days = (end_date - start_date).days + 1
+            if isinstance(days, int) and days > 0 and days != calculated_days:
+                print("  ⚠ Both 'days' and 'end_date' were provided; using 'end_date'")
+            days = calculated_days
+        else:
+            if not isinstance(days, int) or days <= 0:
+                print("  ✗ Provide a positive 'days' or a valid 'end_date' in daily_recurring_tasks")
+                return False
+            end_date = start_date + timedelta(days=days - 1)
+
+        hours = recurring_task.get('hours', 8)
+        try:
+            hours = float(hours)
+            if hours <= 0:
+                raise ValueError()
+        except (ValueError, TypeError):
+            print("  ✗ 'hours' must be a positive number; using default 8h")
+            hours = 8
+
+        include_weekends = bool(recurring_task.get('include_weekends', False))
+        use_custom_task_id = bool(recurring_task.get('custom_task_id', False))
+        entry_description = str(recurring_task.get('entry_description', '')).strip()
+        task_display = task_name if task_name else f"Task ID {task_id}"
+        summary = str(recurring_task.get('summary', task_display)).strip() or task_display
+
+        if not dry_run:
+            if not task_id:
+                task_id = self.get_task_by_name(task_name)
+                if not task_id:
+                    print("  ✗ Cannot create recurring time entries without an existing task")
+                    return False
+
+        event_payload = {'summary': summary}
+        success_count = 0
+
+        for day_offset in range(days):
+            current_date = start_date + timedelta(days=day_offset)
+
+            if dry_run:
+                print(
+                    f"  [DRY RUN] Would add {hours}h for {current_date.strftime('%Y-%m-%d')} "
+                    f"on task '{task_display}'"
+                )
+                success_count += 1
+                continue
+
+            if self.create_time_entry(
+                task_id=task_id,
+                event=event_payload,
+                date=current_date,
+                hours=hours,
+                skip_weekends=not include_weekends,
+                description=entry_description if entry_description else None,
+                use_custom_task_id=use_custom_task_id
+            ):
+                success_count += 1
+
+        return success_count == days
 
     def create_absence_entries(self, event: Dict, event_type: str) -> bool:
         """Create time entries for each day of an absence event"""
@@ -327,8 +498,7 @@ class ClickUpCalendarSync:
         events = self.fetch_calendar_events(days_ahead)
 
         if not events:
-            print("No events found to sync")
-            return
+            print("No calendar events found to sync")
 
         # Build a set of dates that have public holidays
         public_holiday_dates = set()
@@ -390,6 +560,34 @@ class ClickUpCalendarSync:
             else:
                 print(f"\nSkipping: {event['summary']} (no matching category)")
                 skipped_count += 1
+
+        # Process manually configured recurring daily tasks
+        if self.daily_recurring_tasks:
+            print("\n" + "="*60)
+            print("Processing configured daily recurring tasks")
+            print("="*60)
+
+            for index, recurring_task in enumerate(self.daily_recurring_tasks, start=1):
+                task_name = recurring_task.get('task_name', f"Recurring task #{index}")
+                start_date = recurring_task.get('start_date', 'today')
+                end_date = recurring_task.get('end_date')
+                days = recurring_task.get('days', 'N/A')
+
+                range_text = f"start: {start_date}"
+                if end_date:
+                    range_text += f", end: {end_date}"
+                else:
+                    range_text += f", days: {days}"
+
+                print(
+                    f"\nRecurring task {index}: {task_name} "
+                    f"({range_text})"
+                )
+
+                if self.create_daily_recurring_entries(recurring_task, dry_run=dry_run):
+                    created_count += 1
+                else:
+                    skipped_count += 1
 
         print("\n" + "="*60)
         print(f"Sync Complete!")

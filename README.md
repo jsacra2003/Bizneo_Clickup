@@ -7,6 +7,7 @@ Automatically sync calendar events (sick leave, student leave, vacation, etc.) f
 - Fetch events from iCal calendar URLs (Bizneo, Google Calendar, etc.)
 - Automatically categorize events (sick leave, student leave, vacation)
 - Create corresponding tasks in ClickUp with proper status and time estimates
+- Add a specific recurring task daily for a fixed number of days
 - Configurable event mappings and task templates
 - Dry-run mode for testing
 - Environment variable support for sensitive credentials
@@ -46,6 +47,7 @@ cp config.example.json config.json
 
 Edit `config.json` to customize:
 - Event type mappings (sick leave, student leave, vacation)
+- Daily recurring task blocks (task name, start date, days, and hours)
 - ClickUp status names
 - Task naming conventions
 - Time estimates
@@ -110,6 +112,43 @@ python sync_calendar.py --dry-run
 ```bash
 python sync_calendar.py --config my-config.json
 ```
+
+## Daily Recurring Task (Fixed Number of Days)
+
+If you want one specific existing task to be repeated every day for `x` days (or until a fixed end date), add it under `sync_settings.daily_recurring_tasks` in `config.json`:
+
+```json
+{
+  "sync_settings": {
+    "daily_recurring_tasks": [
+      {
+        "task_id": "",
+        "custom_task_id": false,
+        "task_name": "Daily Admin",
+        "summary": "Daily Admin Block",
+        "entry_description": "Planned recurring admin work",
+        "start_date": "2026-04-10",
+        "end_date": "2026-04-19",
+        "days": 10,
+        "hours": 2,
+        "include_weekends": false
+      }
+    ]
+  }
+}
+```
+
+Notes:
+- Use `task_id` (recommended) for an existing task, or `task_name` to find an existing task by name.
+- This flow does not create new ClickUp tasks; it only adds time entries to existing tasks.
+- If your `task_id` is a custom ID like `INF-1353`, set `custom_task_id: true` and ensure `CLICKUP_TEAM_ID` is set in `.env`.
+- `start_date` format is `YYYY-MM-DD`. If omitted, it starts today.
+- Use either `days` or `end_date`.
+- `end_date` format is `YYYY-MM-DD` and is inclusive.
+- If both `days` and `end_date` are provided, `end_date` takes precedence.
+- `hours` defaults to `8` if omitted.
+- `include_weekends` defaults to `false`.
+- Existing entries on the same date are skipped automatically.
 
 ## Event Categorization
 
@@ -217,19 +256,31 @@ sudo systemctl start clickup-sync.timer
   "sync_settings": {
     "event_mappings": {
       "vacation": {
-        "clickup_status": "vacation",
+        "clickup_task_name": "Vacations",
         "description": "Vacation day"
       },
       "student_leave": {
-        "clickup_status": "student_leave",
+        "clickup_task_name": "Student worker protocol",
         "description": "Student leave"
       },
       "sick_leave": {
-        "clickup_status": "sick_leave",
+        "clickup_task_name": "Sick leave",
         "description": "Sick leave"
       }
     },
-    "default_time_estimate_hours": 8
+    "daily_recurring_tasks": [
+      {
+        "task_id": "",
+        "task_name": "Daily Admin",
+        "summary": "Daily Admin Block",
+        "entry_description": "Planned recurring admin work",
+        "start_date": "2026-04-10",
+        "end_date": "2026-04-14",
+        "days": 5,
+        "hours": 2,
+        "include_weekends": false
+      }
+    ]
   }
 }
 ```

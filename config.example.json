@@ -21,6 +21,17 @@
         "clickup_task_name": "Other",
         "description": "Other absence"
       }
-    }
+    },
+    "daily_recurring_tasks": [
+      {
+        "task_id": "",
+        "custom_task_id": false,
+        "start_date": "2026-04-10",
+        "end_date": "2026-04-14",
+        "days": 5,
+        "hours": 2,
+        "include_weekends": false
+      }
+    ]
   }
 }
