@@ -368,7 +368,29 @@ class ClickUpCalendarSync:
         except ValueError:
             return None
 
-    def create_daily_recurring_entries(self, recurring_task: Dict, dry_run: bool = False) -> bool:
+    def build_occupied_dates(self, events: List[Dict]) -> set:
+        """Build a set of dates occupied by synced calendar events"""
+        occupied_dates = set()
+
+        for event in events:
+            if not self.categorize_event(event):
+                continue
+
+            current_date = event['start']
+            end_date = event['end']
+
+            while current_date <= end_date:
+                occupied_dates.add(current_date.date())
+                current_date += timedelta(days=1)
+
+        return occupied_dates
+
+    def create_daily_recurring_entries(
+        self,
+        recurring_task: Dict,
+        dry_run: bool = False,
+        occupied_dates: Optional[set] = None
+    ) -> bool:
         """Create time entries for a specific task repeated every day for a date range"""
         task_id_raw = recurring_task.get('task_id')
         task_id = str(task_id_raw).strip() if task_id_raw else None
@@ -434,17 +456,27 @@ class ClickUpCalendarSync:
                     return False
 
         event_payload = {'summary': summary}
-        success_count = 0
+        created_count = 0
+        skipped_count = 0
+        failed = False
 
         for day_offset in range(days):
             current_date = start_date + timedelta(days=day_offset)
+
+            if occupied_dates and current_date.date() in occupied_dates:
+                print(
+                    f"  ⊘ Skipping occupied day {current_date.strftime('%Y-%m-%d (%A)')} "
+                    f"(calendar event exists)"
+                )
+                skipped_count += 1
+                continue
 
             if dry_run:
                 print(
                     f"  [DRY RUN] Would add {hours}h for {current_date.strftime('%Y-%m-%d')} "
                     f"on task '{task_display}'"
                 )
-                success_count += 1
+                created_count += 1
                 continue
 
             if self.create_time_entry(
@@ -456,9 +488,11 @@ class ClickUpCalendarSync:
                 description=entry_description if entry_description else None,
                 use_custom_task_id=use_custom_task_id
             ):
-                success_count += 1
+                created_count += 1
+            else:
+                failed = True
 
-        return success_count == days
+        return not failed
 
     def create_absence_entries(self, event: Dict, event_type: str) -> bool:
         """Create time entries for each day of an absence event"""
@@ -513,6 +547,8 @@ class ClickUpCalendarSync:
                     current_date += timedelta(days=1)
 
         print(f"Found {len(public_holiday_dates)} public holiday dates (excluding weekends)")
+        occupied_dates = self.build_occupied_dates(events)
+        print(f"Found {len(occupied_dates)} occupied dates from calendar events")
 
         # Process each event
         created_count = 0
@@ -584,7 +620,11 @@ class ClickUpCalendarSync:
                     f"({range_text})"
                 )
 
-                if self.create_daily_recurring_entries(recurring_task, dry_run=dry_run):
+                if self.create_daily_recurring_entries(
+                    recurring_task,
+                    dry_run=dry_run,
+                    occupied_dates=occupied_dates
+                ):
                     created_count += 1
                 else:
                     skipped_count += 1
